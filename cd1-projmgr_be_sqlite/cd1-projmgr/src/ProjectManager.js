@@ -4,8 +4,8 @@ import {
   createProject,
   updateProject,
   deleteProjectApi,
-  exportProjectsApi,
 } from "./api";
+import * as XLSX from "xlsx";
 
 const PHASE_NAMES = [
   "Flowchart",
@@ -55,9 +55,9 @@ function ProjectManager() {
     if (!value) return "-";
     const d = new Date(value);
     if (Number.isNaN(d.getTime())) return value || "-";
-  
+
     return d.toLocaleString("vi-VN", {
-      timeZone: "Asia/Bangkok", // ép về VN chuẩn
+      timeZone: "Asia/Bangkok",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -87,7 +87,7 @@ function ProjectManager() {
   }, []);
 
   useEffect(() => {
-    const intervalMs = isProjectModalOpen ? 10000 : 10000;
+    const intervalMs = isProjectModalOpen ? 1000 : 1000;
     const intervalId = setInterval(() => {
       loadProjects();
     }, intervalMs);
@@ -124,6 +124,112 @@ function ProjectManager() {
       return matchesSearch && matchesOwner && matchesLevel && matchesStatus;
     });
   }, [projects, filters]);
+
+  // ================== EXPORT XLSX (HEADER 2 DÒNG + MERGE Ô) ==================
+  const handleExport = () => {
+    try {
+      // tổng cột: 5 cột đầu + 11 phase + 2 cột cuối = 18
+      const phaseCount = PHASE_NAMES.length;
+
+      // Row 1: STT, Tên dự án, Code Sale, Người phụ trách, Cấp độ, "Các công đoạn thiết kế", (trống cho phần merge), Hiện trạng, Thời gian cập nhật
+      const headerRow1 = [
+        "STT",
+        "Tên dự án",
+        "Code Sale",
+        "Người phụ trách",
+        "Cấp độ",
+        "Các công đoạn thiết kế",
+        ...Array(phaseCount - 1).fill(""),
+        "Hiện trạng",
+        "Thời gian cập nhật",
+      ];
+
+      // Row 2: trống 5 cột đầu, tên các công đoạn, trống 2 cột cuối
+      const headerRow2 = [
+        "",
+        "",
+        "",
+        "",
+        "",
+        ...PHASE_NAMES,
+        "",
+        "",
+      ];
+
+      // Data rows
+      const dataRows = filteredProjects.map((p, idx) => {
+        const baseCols = [
+          idx + 1,
+          p.name || "",
+          p.codeSale || "",
+          p.owner || "",
+          p.level || "",
+        ];
+
+        const phaseCols = PHASE_NAMES.map((phaseName) => {
+          const ph = p.phases?.find((x) => x.name === phaseName) || {};
+          const status = ph.status || "";
+          const plan = ph.dueDate || "";
+          const actual = ph.actualDate || "";
+          const progress =
+            typeof ph.progress === "number" ? `${ph.progress}%` : "";
+
+          return `Status: ${status}
+Plan: ${plan}
+Actual: ${actual}
+Progress: ${progress}`;
+        });
+
+        const tailCols = [
+          p.currentStatus || "",
+          formatDateTime(p.updatedAt),
+        ];
+
+        return [...baseCols, ...phaseCols, ...tailCols];
+      });
+
+      const wsData = [headerRow1, headerRow2, ...dataRows];
+
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+      // Thiết lập merge để header giống Excel mẫu
+      // index cột: 0..17
+      const merges = [
+        // STT, Tên dự án, Code Sale, Người phụ trách, Cấp độ (merge theo chiều dọc 2 dòng)
+        { s: { r: 0, c: 0 }, e: { r: 1, c: 0 } },
+        { s: { r: 0, c: 1 }, e: { r: 1, c: 1 } },
+        { s: { r: 0, c: 2 }, e: { r: 1, c: 2 } },
+        { s: { r: 0, c: 3 }, e: { r: 1, c: 3 } },
+        { s: { r: 0, c: 4 }, e: { r: 1, c: 4 } },
+
+        // Ô "Các công đoạn thiết kế" ngang qua 11 công đoạn (cột 5 -> 15, dòng 1)
+        { s: { r: 0, c: 5 }, e: { r: 0, c: 5 + phaseCount - 1 } },
+
+        // Hiện trạng, Thời gian cập nhật (merge dọc 2 dòng)
+        { s: { r: 0, c: 5 + phaseCount }, e: { r: 1, c: 5 + phaseCount } },
+        { s: { r: 0, c: 5 + phaseCount + 1 }, e: { r: 1, c: 5 + phaseCount + 1 } },
+      ];
+
+      ws["!merges"] = merges;
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Projects");
+
+      // Tạo tên file KHDACD1_yyMMdd.xlsx
+      const now = new Date();
+      const yy = String(now.getFullYear()).slice(-2);
+      const MM = String(now.getMonth() + 1).padStart(2, "0");
+      const dd = String(now.getDate()).padStart(2, "0");
+      const fileName = `KHDACD1_${yy}${MM}${dd}.xlsx`;
+
+      XLSX.writeFile(wb, fileName);
+
+    } catch (err) {
+      console.error(err);
+      alert("Export thất bại");
+    }
+  };
+  // ================== HẾT EXPORT XLSX ==================
 
   // mở modal thêm
   const openAddModal = () => {
@@ -221,21 +327,6 @@ function ProjectManager() {
     } catch (err) {
       console.error(err);
       alert("Xoá dự án thất bại");
-    }
-  };
-
-  const handleExport = async () => {
-    try {
-      const blob = await exportProjectsApi();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "projects_export.json";
-      a.click();
-      window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error(err);
-      alert("Export thất bại");
     }
   };
 
@@ -390,7 +481,6 @@ function ProjectManager() {
                 Các công đoạn thiết kế
               </th>
               <th rowSpan="2">Hiện trạng</th>
-              {/* cột mới */}
               <th rowSpan="2">Thời gian cập nhật</th>
               <th rowSpan="2">Thao tác</th>
             </tr>
@@ -469,8 +559,6 @@ function ProjectManager() {
                   ))}
 
                   <td>{p.currentStatus || "-"}</td>
-
-                  {/* ô hiển thị thời gian cập nhật */}
                   <td>{formatDateTime(p.updatedAt)}</td>
 
                   <td className="action-cell">
